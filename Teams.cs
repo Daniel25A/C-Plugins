@@ -20,8 +20,9 @@ namespace Oxide.Plugins
         static string SysName = "Teams";
         static Dictionary<ulong, UserTeam> TeamsPlayers = new Dictionary<ulong, UserTeam>();
         static Dictionary<string, String> Mensajes = new Dictionary<string, string>();
-        static Dictionary<ulong, System.Timers.Timer> Invitaciones = new Dictionary<ulong, System.Timers.Timer>();
+        static Dictionary<ulong, Oxide.Plugins.Timer> Invitaciones = new Dictionary<ulong, Oxide.Plugins.Timer>();
         static Dictionary<ulong, bool> aprobaciones = new Dictionary<ulong, bool>();
+        static Dictionary<ulong, UserTeam> ClanInvited = new Dictionary<ulong, UserTeam>();
         static string Blue = "[color #0099FF]",
                       Red = "[color #FF0000]",
                       Pink = "[color #CC66FF]",
@@ -47,6 +48,11 @@ namespace Oxide.Plugins
                 if (User == null)
                 {
                     rust.SendChatMessage(Admin, SysName, "The user doest Exist");
+                }
+                else if (TeamsPlayers.ContainsKey(User.userID))
+                {
+                    rust.Notice(Admin, "El player ya es owner de un clan");
+                   
                 }
                 else
                 {
@@ -94,37 +100,83 @@ namespace Oxide.Plugins
                 rust.SendChatMessage(Player, SysName, string.Format(Mensajes["playerdontfind"], args[0]));
                 return;
             }
+            if (TeamsPlayers.ContainsKey(PlayerToInvite.userID))
+            {
+                rust.SendChatMessage(Player, SysName, Red + "El Player Ya Esta en un TEAM");
+                return;
+            }
             if (aprobaciones.ContainsKey(PlayerToInvite.userID))
             {
                 rust.SendChatMessage(Player, SysName, string.Format(Mensajes["alreadyinvite"], PlayerToInvite.displayName));
                 return;
             }
+            rust.SendChatMessage(Player, SysName, "Invitaste a " + PlayerToInvite.displayName + " A unirte a tu Team");
+            rust.SendChatMessage(PlayerToInvite, SysName, Player.displayName + " te Invito a Unirte a un Clan, Tienes 15 Segundos para Responder" + Yellow + " /taccept");
             aprobaciones.Add(PlayerToInvite.userID, false);
-            Invitaciones.Add(Player.userID, new System.Timers.Timer()
+            Invitaciones.Add(Player.userID, timer.Once(15f, () => AddUserToTeam(Player, PlayerToInvite)));
+        }
+        void AddUserToTeam(NetUser Owner, NetUser Invite)
+        {
+            ulong PlayerID = Owner.userID;
+            NetUser UserInvite = Invite;
+            NetUser UserSendInvite = Owner;
+            if (aprobaciones[UserInvite.userID] == false)
             {
+                rust.SendChatMessage(UserSendInvite, SysName, Mensajes["nojoin"]);
+            }
+            else
+            {
+                var _Config = TeamsPlayers.Values.FirstOrDefault(x => x.PlayerID == PlayerID);
+                TeamsPlayers.Add(UserInvite.userID, new UserTeam() { PlayerID = UserInvite.userID, isTheOwner = false, TAG = _Config.TAG });
+                rust.BroadcastChat(SysName, string.Format(Mensajes["jointeam"], UserInvite.displayName, _Config.TAG));
+            }
+            Invitaciones[PlayerID].Destroy();
+            Invitaciones.Remove(PlayerID);
+            aprobaciones.Remove(UserInvite.userID);
+        }
+        void LeaveUser()
+        {
 
-                AutoReset = false,
-                Interval = 1000 * 15
-            });
-            Invitaciones[Player.userID].Elapsed += (p1, p2) => {
-                ulong PlayerID = Player.userID;
-                NetUser UserInvite = PlayerToInvite;
-                NetUser UserSendInvite = Player;
-                if (aprobaciones[UserInvite.userID] == false)
-                {
-                    rust.SendChatMessage(UserSendInvite, SysName, Mensajes["nojoin"]);
-                }
-                else
-                {
-                    var _Config = TeamsPlayers.Values.FirstOrDefault(x => x.PlayerID == PlayerID);
-                    TeamsPlayers.Add(UserSendInvite.userID, new UserTeam() { PlayerID = UserSendInvite.userID, isTheOwner = false, TAG = _Config.TAG });
-                    rust.BroadcastChat(SysName, string.Format(Mensajes["jointeam"], UserInvite.displayName, _Config.TAG));
-                }
-                Invitaciones.Remove(PlayerID);
-                aprobaciones.Remove(UserSendInvite.userID);
-                (p1 as System.Timers.Timer).Dispose();
-            };
-            Invitaciones[Player.userID].Start();
+        }
+        void TeamMSG(NetUser Player, String[] args)
+        {
+            if (TeamsPlayers.ContainsKey(Player.userID) == false)
+            {
+                rust.Notice(Player, "No tienes team");
+                return;
+            }
+            if (args.Length == 0)
+            {
+                rust.SendChatMessage(Player, SysName, "use /tmsg (Mensaje)");
+                return;
+            }
+            String _Name;
+            String _MSG="";
+            Boolean Owner=false;
+            if (TeamsPlayers.Values.Where(x => x.PlayerID == Player.userID).FirstOrDefault().isTheOwner == true)
+                Owner = true;
+            else
+                Owner = false;
+            if (Owner)
+            {
+                _Name = "[Owner]" + Player.displayName;
+                _MSG += Teal;
+            }
+            else
+            {
+                _Name = "[Player]" + Player.displayName;
+                _MSG += Green;
+            }
+            foreach (var msg in args)
+            {
+                _MSG += msg + " ";
+            }
+            foreach (var xPlayer in TeamsPlayers.Values.Where(x => x.TAG == TeamsPlayers[Player.userID].TAG))
+            {
+                if (NetUser.FindByUserID(xPlayer.PlayerID) == null)
+                    continue;
+                rust.SendChatMessage(NetUser.FindByUserID(xPlayer.PlayerID), xPlayer.TAG, _Name + ":" + _MSG);
+            }
         }
         void OnPlayerChat(NetUser Player, string message)
         {
@@ -135,18 +187,26 @@ namespace Oxide.Plugins
         {
             CreateTeam(netUser, args);
         }
-        [ChatCommand("cadduser")]
+        [ChatCommand("tmsg")]
+        void cmdsendMsg(NetUser netUser, string command, string[] args)
+        {
+            TeamMSG(netUser, args);
+        }
+        [ChatCommand("iteam")]
         void cmdadduser(NetUser netUser, string command, string[] args)
         {
-                    
+            InviteUser(netUser, args);     
         }
-        [ChatCommand("serverinfo")]
-        void cmdinfo(NetUser netUser, string command, string[] args)
+        [ChatCommand("taccept")]
+        void cmdaccept(NetUser netUser, string command, string[] args)
         {
-            if (netUser.admin == false) return;
-            rust.BroadcastChat("ServerInfo", string.Format("Players Online:{0}", rust.GetAllNetUsers().Count()));
-            rust.BroadcastChat("ServerInfo", string.Format("AutoMod: false"));
-            rust.BroadcastChat("ServerInfo", string.Format("The Player:{0} is the that more playing Here", rust.GetAllNetUsers().FirstOrDefault(x => x.connectTime == rust.GetAllNetUsers().Max(t => t.connectTime)).displayName));
+            if (aprobaciones.ContainsKey(netUser.userID) == false)
+            {
+                rust.Notice(netUser, "No estas invitado a ningun team");
+                return;
+            }
+            aprobaciones[netUser.userID] = true;
+            rust.Notice(netUser, "Aguarde..");
         }
     }
     class UserTeam
