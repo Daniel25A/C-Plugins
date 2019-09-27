@@ -134,10 +134,116 @@ namespace Oxide.Plugins
             Invitaciones.Remove(PlayerID);
             aprobaciones.Remove(UserInvite.userID);
         }
-        void LeaveUser()
+        void LeaveUser(NetUser Player)
         {
+            if (TeamsPlayers.ContainsKey(Player.userID) == false)
+                return;
+            rust.BroadcastChat(SysName, Green + Player.displayName + Green + " Salio del team " + Blue + TeamsPlayers[Player.userID].TAG);
+            TeamsPlayers.Remove(Player.userID);
+        }
+        void CancelarInvitaciones(NetUser Player)
+        {
+            if (aprobaciones.ContainsKey(Player.userID))
+                aprobaciones.Remove(Player.userID);
+            rust.Notice(Player, "Cancelaste todos los pedidos de Team");
 
         }
+        void DeleteTeam(NetUser administrator, String[] Args)
+        {
+            if (administrator.admin == false)
+                return;
+            if (Args.Length == 0)
+            {
+                rust.SendChatMessage(administrator, SysName, "Usa /deleteteam (TeamName)");
+                return;
+            }
+            var TempList = TeamsPlayers.Values.Where(x => x.TAG.Contains(Args[0].Trim())).Select(x => x.PlayerID).ToList<ulong>();
+            foreach (var x in TempList)
+            {
+                TeamsPlayers.Remove(x);
+            }
+            rust.Notice(administrator, "Done !");
+            TempList.Clear();
+        }
+        void TeamInfo(NetUser Player, String[] Args)
+        {
+            if (Args.Length == 0)
+                return;
+            if (!TeamsPlayers.Values.Any(x => x.TAG.Contains(Args[0].Trim())))
+            {
+                rust.Notice(Player, "no existe el TEAM");
+                return;
+            }
+            UserTeam Team = TeamsPlayers.Values.FirstOrDefault(x => x.TAG.Contains(Args[0]) && x.isTheOwner==true);
+            rust.SendChatMessage(Player, SysName, Yellow + "Nombre del Team: " + Blue + Team.TAG);
+            rust.SendChatMessage(Player, SysName, Yellow + "ID Del Owner: " + Blue + Team.PlayerID);
+            rust.SendChatMessage(Player, SysName, Yellow + "Integrantes: " + Blue+ TeamsPlayers.Values.Where(x => x.TAG.Contains(Args[0])).Count().ToString());
+        }
+        void ExpulsarMiembro(NetUser Player, string[] args)
+        {
+            if (TeamsPlayers.ContainsKey(Player.userID) == false)
+            {
+                rust.SendChatMessage(Player, SysName, Red+"No tienes un team");
+                return;
+            }
+            if (args.Length == 0)
+            {
+                rust.SendChatMessage(Player, SysName, "Use /tkick (PlayerName)");
+                return;
+            }
+            var User = rust.GetAllNetUsers().ToList().FirstOrDefault(x => x.displayName.Contains(args[0]));
+            if (User == null)
+            {
+                rust.Notice(Player, "Este Miembro no existe en el server");
+                return;
+            }
+            if (TeamsPlayers.Values.Where(x => x.PlayerID == User.userID).FirstOrDefault().isTheOwner == true)
+            {
+                rust.SendChatMessage(Player, SysName, "No puedes salir de tu propio Team, pidele a un administrador que lo elimine");
+                return;
+            }
+            if (TeamsPlayers.ContainsKey(User.userID) == false)
+            {
+                rust.Notice(Player, "Este Miembro no forma parte de ningun Clan");
+                return;
+            }
+            if (TeamsPlayers.Values.FirstOrDefault(x => x.PlayerID == User.userID).TAG != TeamsPlayers.Values.FirstOrDefault(x2 => x2.PlayerID == Player.userID).TAG)
+            {
+                rust.Notice(Player, "Este Miebro no es parte de tu Team");
+                return;
+            }
+            TeamsPlayers.Remove(User.userID);
+            rust.BroadcastChat(SysName, User.displayName + Green + "Fue Expulsado de Su team.." + Yellow + " Este solo, Reclutenlo..");
+
+        }
+        object ModifyDamage(TakeDamage takedamage, DamageEvent damage)
+		{
+            if (damage.attacker.client == null || damage.victim.client == null)
+                return null;
+            NetUser Atacante = damage.attacker.client.netUser;
+            NetUser Victima = damage.victim.client.netUser;
+            if (TeamsPlayers.ContainsKey(Atacante.userID) && TeamsPlayers.ContainsKey(Victima.userID))
+            {
+                UserTeam CheckAttack = TeamsPlayers.Values.FirstOrDefault(x => x.PlayerID == Victima.userID),
+                         CheckVictim = TeamsPlayers.Values.FirstOrDefault(x => x.PlayerID == Atacante.userID);
+                if (CheckAttack.PlayerID == CheckVictim.PlayerID)
+                    return null;
+                if (CheckAttack.TAG == CheckVictim.TAG)
+                {
+                    rust.Notice(Atacante, "Stop, es de tu clan");
+                   return  CancelDamage(damage);
+                }
+            }
+            return null;
+		}
+        // Method By : Schwarz
+        object CancelDamage(DamageEvent damage)
+        {
+            damage.amount = 0f;
+            damage.status = LifeStatus.IsAlive;
+            return damage;
+        }
+
         void TeamMSG(NetUser Player, String[] args)
         {
             if (TeamsPlayers.ContainsKey(Player.userID) == false)
@@ -182,12 +288,17 @@ namespace Oxide.Plugins
         {
    
         }
+        [ChatCommand("tcancel")]
+        void cmdcancelar(NetUser netUser, string command, string[] args)
+        {
+            CancelarInvitaciones(netUser);
+        }
         [ChatCommand("cteam")]
         void cmdCreateTeam(NetUser netUser, string command, string[] args)
         {
             CreateTeam(netUser, args);
         }
-        [ChatCommand("tmsg")]
+        [ChatCommand("e")]
         void cmdsendMsg(NetUser netUser, string command, string[] args)
         {
             TeamMSG(netUser, args);
@@ -196,6 +307,26 @@ namespace Oxide.Plugins
         void cmdadduser(NetUser netUser, string command, string[] args)
         {
             InviteUser(netUser, args);     
+        }
+        [ChatCommand("tkick")]
+        void cmdkick(NetUser netUser, string command, string[] args)
+        {
+            ExpulsarMiembro(netUser, args);
+        }
+        [ChatCommand("tleave")]
+        void cmdleave(NetUser netUser, string command, string[] args)
+        {
+            LeaveUser(netUser);
+        }
+        [ChatCommand("tdelete")]
+        void cmddeleteTeam(NetUser netUser, string command, string[] args)
+        {
+            DeleteTeam(netUser, args);
+        }
+        [ChatCommand("tinfo")]
+        void cmdTeamInfo(NetUser netUser, string command, string[] args)
+        {
+            TeamInfo(netUser, args);
         }
         [ChatCommand("taccept")]
         void cmdaccept(NetUser netUser, string command, string[] args)
