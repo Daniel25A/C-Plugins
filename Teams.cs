@@ -236,7 +236,6 @@ namespace Oxide.Plugins
             }
             return null;
 		}
-        // Method By : Schwarz
         object CancelDamage(DamageEvent damage)
         {
             damage.amount = 0f;
