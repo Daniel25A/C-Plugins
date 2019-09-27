@@ -6,10 +6,17 @@ using UnityEngine;
 using Rust;
 using Oxide;
 using Oxide.Core;
-using Facepunch;
+using Oxide.Core;
+using Oxide.Core.Configuration;
+using Oxide.Core.Libraries.Covalence;
+using Oxide.Core.SQLite.Libraries;
+using Oxide.Core.MySql.Libraries;
+using Newtonsoft.Json.Linq;
+using Oxide.Core.Database;
 using Facepunch.MeshBatch;
 using Oxide.Core.Plugins;
 using System.Reflection;
+using SqlText = Oxide.Core.Database.Sql;
 namespace Oxide.Plugins
 {
     [Info("Teams", "Daniel25A", 0.2)]
@@ -18,7 +25,8 @@ namespace Oxide.Plugins
     class Teams : RustLegacyPlugin
     {
         static string SysName = "Teams";
-        static Dictionary<ulong, UserTeam> TeamsPlayers = new Dictionary<ulong, UserTeam>();
+        static string DbName = "teams.sqlite";
+        static Dictionary<String, UserTeam> TeamsPlayers = new Dictionary<string, UserTeam>();
         static Dictionary<string, String> Mensajes = new Dictionary<string, string>();
         static Dictionary<ulong, Oxide.Plugins.Timer> Invitaciones = new Dictionary<ulong, Oxide.Plugins.Timer>();
         static Dictionary<ulong, bool> aprobaciones = new Dictionary<ulong, bool>();
@@ -31,6 +39,7 @@ namespace Oxide.Plugins
                       Purple = "[color #6600CC]",
                       White = "[color #FFFFFF]",
                       Yellow = "[color #FFFF00]";
+        static Core.Configuration.DynamicConfigFile TeamsData;
         void CreateTeam(NetUser Admin, String[] Args)
         {
             string _TeamName;
@@ -49,14 +58,14 @@ namespace Oxide.Plugins
                 {
                     rust.SendChatMessage(Admin, SysName, "The user doest Exist");
                 }
-                else if (TeamsPlayers.ContainsKey(User.userID))
+                else if (TeamsPlayers.ContainsKey(User.userID.ToString()))
                 {
                     rust.Notice(Admin, "El player ya es owner de un clan");
                    
                 }
                 else
                 {
-                    TeamsPlayers.Add(User.userID, new UserTeam()
+                    TeamsPlayers.Add(User.userID.ToString(), new UserTeam()
                     {
                         PlayerID = User.userID,
                         isTheOwner = true,
@@ -65,6 +74,62 @@ namespace Oxide.Plugins
                     rust.SendChatMessage(Admin, SysName, string.Format("Team Create Sucefully -> Owner {0}", User.displayName));
                 }
             }
+        }
+        #region SQLITE
+        Core.SQLite.Libraries.SQLite SqliteController = Interface.GetMod().GetLibrary<Core.SQLite.Libraries.SQLite>();
+        Connection sqli_connect;
+        void ConnectSqlite()
+        {
+            try
+            {
+                sqli_connect = SqliteController.OpenDb("teams.sqlite", this);
+                if (sqli_connect != null)
+                    Debug.Log("Base de Datos Conectada con exito");
+                SqliteController.Insert(SqlText.Builder.Append("create table if not exists  Teams(SteamID varchar(150),isOwner int,tag Vachar(20));"), sqli_connect);
+             //SqliteController.Insert(SqlText.Builder.Append("insert into Teams (SteamID,isOwner,tag) values('765xxx',1,'[TEST]')"), sqli_connect);
+            }
+            catch (Exception)
+            {
+                
+                throw;
+            }
+        }
+        void SaveTeams()
+        {
+            SqliteController.Insert(SqlText.Builder.Append("delete from Teams"), sqli_connect);
+            foreach (var x in TeamsPlayers.Values)
+            {
+                SqliteController.Insert(SqlText.Builder.Append(
+                    "insert into Teams (SteamID,isOwner,tag) values({0},{1},{2})",
+                    x.PlayerID.ToString(),
+                    x.isTheOwner == true ? 1 : 2,
+                    x.TAG
+                    ), sqli_connect);
+            }
+        }
+        void LoadTems()
+        {
+            SqliteController.Query(SqlText.Builder.Append("select *from Teams"), sqli_connect, reader => {
+                TeamsPlayers.Clear();
+                foreach (var xdata in reader)
+                {
+                    TeamsPlayers.Add(xdata["SteamID"].ToString(), new UserTeam() {
+                        PlayerID = ulong.Parse(xdata["SteamID"].ToString()),
+                        isTheOwner = (Int32)xdata["isOwner"]==1?true:false,
+                        TAG=xdata["tag"].ToString()
+                    });
+                }    
+            });
+        }
+        #endregion
+        void Loaded()
+        {
+
+            ConnectSqlite();
+        }
+        void OnServerInitialized()
+        {
+       
         }
         void Init()
         {
@@ -76,10 +141,11 @@ namespace Oxide.Plugins
             Mensajes.Add("alreadyinvite", Yellow + "{0} " + Blue + " Ya tiene una invitacion pendiente");
             Mensajes.Add("invite", Yellow + "{0} " + Green + "Te invito a unirte al TEAM " + Blue + "{1}");
             Mensajes.Add("nojoin", Green + "El Player no respondio a tu pedido");
+            
         }
         void InviteUser(NetUser Player, String[] args)
         {
-            if (TeamsPlayers.ContainsKey(Player.userID) == false)
+            if (TeamsPlayers.ContainsKey(Player.userID.ToString()) == false)
             {
                 rust.SendChatMessage(Player, SysName, Mensajes["noteam"]);
                 return;
@@ -100,7 +166,7 @@ namespace Oxide.Plugins
                 rust.SendChatMessage(Player, SysName, string.Format(Mensajes["playerdontfind"], args[0]));
                 return;
             }
-            if (TeamsPlayers.ContainsKey(PlayerToInvite.userID))
+            if (TeamsPlayers.ContainsKey(PlayerToInvite.userID.ToString()))
             {
                 rust.SendChatMessage(Player, SysName, Red + "El Player Ya Esta en un TEAM");
                 return;
@@ -127,19 +193,20 @@ namespace Oxide.Plugins
             else
             {
                 var _Config = TeamsPlayers.Values.FirstOrDefault(x => x.PlayerID == PlayerID);
-                TeamsPlayers.Add(UserInvite.userID, new UserTeam() { PlayerID = UserInvite.userID, isTheOwner = false, TAG = _Config.TAG });
+                TeamsPlayers.Add(UserInvite.userID.ToString(), new UserTeam() { PlayerID = UserInvite.userID, isTheOwner = false, TAG = _Config.TAG });
                 rust.BroadcastChat(SysName, string.Format(Mensajes["jointeam"], UserInvite.displayName, _Config.TAG));
             }
             Invitaciones[PlayerID].Destroy();
             Invitaciones.Remove(PlayerID);
             aprobaciones.Remove(UserInvite.userID);
+
         }
         void LeaveUser(NetUser Player)
         {
-            if (TeamsPlayers.ContainsKey(Player.userID) == false)
+            if (TeamsPlayers.ContainsKey(Player.userID.ToString()) == false)
                 return;
-            rust.BroadcastChat(SysName, Green + Player.displayName + Green + " Salio del team " + Blue + TeamsPlayers[Player.userID].TAG);
-            TeamsPlayers.Remove(Player.userID);
+            rust.BroadcastChat(SysName, Green + Player.displayName + Green + " Salio del team " + Blue + TeamsPlayers[Player.userID.ToString()].TAG);
+            TeamsPlayers.Remove(Player.userID.ToString());
         }
         void CancelarInvitaciones(NetUser Player)
         {
@@ -160,7 +227,7 @@ namespace Oxide.Plugins
             var TempList = TeamsPlayers.Values.Where(x => x.TAG.Contains(Args[0].Trim())).Select(x => x.PlayerID).ToList<ulong>();
             foreach (var x in TempList)
             {
-                TeamsPlayers.Remove(x);
+                TeamsPlayers.Remove(x.ToString());
             }
             rust.Notice(administrator, "Done !");
             TempList.Clear();
@@ -181,7 +248,7 @@ namespace Oxide.Plugins
         }
         void ExpulsarMiembro(NetUser Player, string[] args)
         {
-            if (TeamsPlayers.ContainsKey(Player.userID) == false)
+            if (TeamsPlayers.ContainsKey(Player.userID.ToString()) == false)
             {
                 rust.SendChatMessage(Player, SysName, Red+"No tienes un team");
                 return;
@@ -202,7 +269,7 @@ namespace Oxide.Plugins
                 rust.SendChatMessage(Player, SysName, "No puedes salir de tu propio Team, pidele a un administrador que lo elimine");
                 return;
             }
-            if (TeamsPlayers.ContainsKey(User.userID) == false)
+            if (TeamsPlayers.ContainsKey(User.userID.ToString()) == false)
             {
                 rust.Notice(Player, "Este Miembro no forma parte de ningun Clan");
                 return;
@@ -212,7 +279,7 @@ namespace Oxide.Plugins
                 rust.Notice(Player, "Este Miebro no es parte de tu Team");
                 return;
             }
-            TeamsPlayers.Remove(User.userID);
+            TeamsPlayers.Remove(User.userID.ToString());
             rust.BroadcastChat(SysName, User.displayName + Green + "Fue Expulsado de Su team.." + Yellow + " Este solo, Reclutenlo..");
 
         }
@@ -222,7 +289,7 @@ namespace Oxide.Plugins
                 return null;
             NetUser Atacante = damage.attacker.client.netUser;
             NetUser Victima = damage.victim.client.netUser;
-            if (TeamsPlayers.ContainsKey(Atacante.userID) && TeamsPlayers.ContainsKey(Victima.userID))
+            if (TeamsPlayers.ContainsKey(Atacante.userID.ToString()) && TeamsPlayers.ContainsKey(Victima.userID.ToString()))
             {
                 UserTeam CheckAttack = TeamsPlayers.Values.FirstOrDefault(x => x.PlayerID == Victima.userID),
                          CheckVictim = TeamsPlayers.Values.FirstOrDefault(x => x.PlayerID == Atacante.userID);
@@ -236,7 +303,6 @@ namespace Oxide.Plugins
             }
             return null;
 		}
-        // Method By : Schwarz
         object CancelDamage(DamageEvent damage)
         {
             damage.amount = 0f;
@@ -246,7 +312,7 @@ namespace Oxide.Plugins
 
         void TeamMSG(NetUser Player, String[] args)
         {
-            if (TeamsPlayers.ContainsKey(Player.userID) == false)
+            if (TeamsPlayers.ContainsKey(Player.userID.ToString()) == false)
             {
                 rust.Notice(Player, "No tienes team");
                 return;
@@ -277,7 +343,7 @@ namespace Oxide.Plugins
             {
                 _MSG += msg + " ";
             }
-            foreach (var xPlayer in TeamsPlayers.Values.Where(x => x.TAG == TeamsPlayers[Player.userID].TAG))
+            foreach (var xPlayer in TeamsPlayers.Values.Where(x => x.TAG == TeamsPlayers[Player.userID.ToString()].TAG))
             {
                 if (NetUser.FindByUserID(xPlayer.PlayerID) == null)
                     continue;
@@ -327,6 +393,11 @@ namespace Oxide.Plugins
         void cmdTeamInfo(NetUser netUser, string command, string[] args)
         {
             TeamInfo(netUser, args);
+        }
+        [ChatCommand("tsave")]
+        void cmdsaveTeams(NetUser netUser, string command, string[] args)
+        {
+           
         }
         [ChatCommand("taccept")]
         void cmdaccept(NetUser netUser, string command, string[] args)
