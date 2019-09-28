@@ -85,8 +85,6 @@ namespace Oxide.Plugins
                 sqli_connect = SqliteController.OpenDb("teams.sqlite", this);
                 if (sqli_connect != null)
                     Debug.Log("Base de Datos Conectada con exito");
-                SqliteController.Insert(SqlText.Builder.Append("create table if not exists  Teams(SteamID varchar(150),isOwner int,tag Vachar(20));"), sqli_connect);
-             //SqliteController.Insert(SqlText.Builder.Append("insert into Teams (SteamID,isOwner,tag) values('765xxx',1,'[TEST]')"), sqli_connect);
             }
             catch (Exception)
             {
@@ -100,36 +98,48 @@ namespace Oxide.Plugins
             foreach (var x in TeamsPlayers.Values)
             {
                 SqliteController.Insert(SqlText.Builder.Append(
-                    "insert into Teams (SteamID,isOwner,tag) values({0},{1},{2})",
-                    x.PlayerID.ToString(),
-                    x.isTheOwner == true ? 1 : 2,
-                    x.TAG
-                    ), sqli_connect);
+                    "insert into Teams (SteamID,isOwner,tag) values ('" + x.PlayerID.ToString() + "','" + (x.isTheOwner ? 1 : 2) + "','" + x.TAG + "')"), sqli_connect);
             }
+            Debug.Log("[TEAMS] Se Guardo todos los Teams..");
         }
         void LoadTems()
         {
-            SqliteController.Query(SqlText.Builder.Append("select *from Teams"), sqli_connect, reader => {
+            SqliteController.Query(SqlText.Builder.Append("select *from Teams"), sqli_connect, reader =>
+            {
                 TeamsPlayers.Clear();
+                if (reader == null) return;
+                Debug.Log("**********************************************");
                 foreach (var xdata in reader)
                 {
-                    TeamsPlayers.Add(xdata["SteamID"].ToString(), new UserTeam() {
+                   TeamsPlayers.Add(xdata["SteamID"].ToString(), new UserTeam()
+                    {
                         PlayerID = ulong.Parse(xdata["SteamID"].ToString()),
-                        isTheOwner = (Int32)xdata["isOwner"]==1?true:false,
-                        TAG=xdata["tag"].ToString()
+                        isTheOwner = (Int32)xdata["isOwner"] == 1 ? true : false,
+                        TAG = xdata["tag"].ToString()
                     });
-                }    
+                }
             });
+            Debug.Log("[TEAMS] Se Cargo todos los Teams..");
+           
         }
         #endregion
         void Loaded()
         {
 
             ConnectSqlite();
+            LoadTems();
         }
         void OnServerInitialized()
         {
        
+        }
+        void OnServerSave()
+        {
+            SaveTeams();
+        }
+        void Unload()
+        {
+            SaveTeams();
         }
         void Init()
         {
@@ -250,7 +260,7 @@ namespace Oxide.Plugins
         {
             if (TeamsPlayers.ContainsKey(Player.userID.ToString()) == false)
             {
-                rust.SendChatMessage(Player, SysName, Red+"No tienes un team");
+                rust.SendChatMessage(Player, SysName, Red+"No tienes un team.");
                 return;
             }
             if (args.Length == 0)
@@ -394,10 +404,10 @@ namespace Oxide.Plugins
         {
             TeamInfo(netUser, args);
         }
-        [ChatCommand("tsave")]
+        [ChatCommand("guardar")]
         void cmdsaveTeams(NetUser netUser, string command, string[] args)
         {
-           
+            SaveTeams();
         }
         [ChatCommand("taccept")]
         void cmdaccept(NetUser netUser, string command, string[] args)
